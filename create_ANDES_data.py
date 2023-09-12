@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from scipy import interpolate
 import pickle
 import random
-from parameters_and_functions import *
+from parameters_and_functions_WASP76 import *
 
 
 ###################### Read the data and create interpolations
@@ -20,13 +20,28 @@ star_wl = star_wl_read[0].data
 ### Stellar flux interpolation
 star_interp = interpolate.CubicSpline(star_wl, star_spec)
 
-## Model data, so far from petitRADTRANS
-model_radius = np.loadtxt(dire+file_model_radius) # Planetary radius
-model_tdepth = (model_radius/(Rs*1e5))**2  # Transit depth
-model_wl = np.loadtxt(dire+file_model_wl) # Wavelentgh of planetary model
 
-### transit depth interpolation
-model_interp = interpolate.CubicSpline(model_wl, model_tdepth)
+
+if phase_dependency:
+    model_wl = np.loadtxt(dire_model_phase+prefix_model+str(phase_model[0])+suffix_model)[:,0]*1e9
+    model_tdepth = []
+    model_interp = []
+    for i in range(len(phase_model)):
+        model_tdepth.append(np.loadtxt(dire_model_phase+prefix_model+str(phase_model[i])+suffix_model)[:,1])
+        if phase_model[i]>180:
+            phase_model[i]-=360
+    phase_model = np.array(phase_model)
+    model_tdepth = np.array(model_tdepth)/100
+    model_phase_interp = interpolate.CubicSpline(phase_model, model_tdepth)
+    
+else:
+## Much simpler without the time dimension
+    model_radius = np.loadtxt(dire+file_model_radius) # Planetary radius
+    model_tdepth = (model_radius/(Rs*1e5))**2  # Transit depth
+    model_wl = np.loadtxt(dire+file_model_wl) # Wavelentgh of planetary model
+    
+    ### transit depth interpolation
+    model_interp = interpolate.CubicSpline(model_wl, model_tdepth)
 
 ### tellurics
 tellurics_tot = np.loadtxt(dire+tellurics_file)
@@ -71,6 +86,19 @@ Vc           = V0 + Vs - berv  #Geocentric-to-barycentric correction
 #Compute planet RV
 Vp = rvp(phase,Kp,V_inj)
 
+### If we consider phase dependency in the model, create the array of interpolation
+if phase_dependency:
+    model_interp = []
+    for i in range(len(T_obs)):
+        if (phase[i]*360)<min(phase_model):
+            model_phase = model_tdepth[0]
+        elif (phase[i]*360)>max(phase_model):
+            model_phase = model_tdepth[-1]
+        else:
+            model_phase = model_phase_interp(phase[i]*360)
+        model_interp.append(interpolate.CubicSpline(model_wl, model_phase))
+        
+
 
 
 ### Now we create the stellar data, looping over each SPIRou order
@@ -79,10 +107,14 @@ data = []
 SN = []
 blaze = []
 tellurics = []
+orders_final = []
 for i in range(len(orders_spirou)):
 # for i in [25]:
-
-    no=np.where(wlen_orders[:,0]==orders_spirou[i])[0][0]
+    
+    try:
+        no=np.where(wlen_orders[:,0]==orders_spirou[i])[0][0]
+    except:
+        continue
     lmin = wlen_orders[no,1]
     lmax = wlen_orders[no,2]
     
@@ -146,7 +178,10 @@ for i in range(len(orders_spirou)):
             
         ### Add the planet, doppler shifted by its orbital velocity
         if window[t]>0:
-            data_order_high[t] *= (1.-model_interp(wl_order_high*(1-(Vc[t]+Vp[t])/c0))*window[t])
+            if phase_dependency:
+                data_order_high[t] *= (1.-model_interp[t](wl_order_high*(1-(Vc[t]+Vp[t])/c0)))
+            else:
+                data_order_high[t] *= (1.-model_interp(wl_order_high*(1-(Vc[t]+Vp[t])/c0))*window[t])
             
         ### Add tellurics
         if consider_tellurics:
@@ -178,6 +213,7 @@ for i in range(len(orders_spirou)):
 
 
     ### Store the data
+    orders_final.append(orders_spirou[i])
     data.append(data_order)
     wl.append(wl_order)
     SN.append(SN_order)
@@ -187,7 +223,7 @@ for i in range(len(orders_spirou)):
     
 
 ### Save the data
-savedata = (orders_spirou,wl,data,blaze,tellurics,T_obs,phase,window,berv,V0+Vs,airmass,SN)
+savedata = (orders_final,wl,data,blaze,tellurics,T_obs,phase,window,berv,V0+Vs,airmass,SN)
 with open(dire+save_file, 'wb') as specfile:
     pickle.dump(savedata,specfile)
 print("DONE")
